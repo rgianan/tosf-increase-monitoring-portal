@@ -94,3 +94,13 @@ The app writes one row per HEI TOSF application. A single web form submission ma
 - Submitter name, official email, position/unit, and contact number
 
 The admin dashboard computes the Excel-style consolidation summary from this normalized table.
+
+## Submitter self-service (edit / delete)
+
+After OTP verification, submitters can manage their own rows via three actions, all authorized by the OTP session token and scoped to rows whose `Submitted_By_Email` matches the verified email:
+
+- `listMySubmissions` — returns the caller's active (non-voided) rows.
+- `updateMySubmission` — updates proposed TF/OSF, action/status, specifics, and remarks; recomputes `RIR_Category` server-side; stamps `Updated_At`/`Updated_By`.
+- `voidMySubmission` — soft delete: sets `Voided` = `TRUE` and `Voided_At`, keeping the row for audit.
+
+Two columns support this and are added automatically on next run: `Voided` and `Voided_At`. Voided rows are excluded from `listTosfSubmissions`, the dashboard summaries, and CSV export. If you have an existing `TOSF_Submissions` sheet, run any function once (or `setupProject_()`) so the new header columns are appended.

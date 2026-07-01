@@ -82,6 +82,9 @@ function doPost(e) {
     if (action === 'requestEmailOtp') return handleRequestEmailOtp_(payload);
     if (action === 'verifyEmailOtp') return handleVerifyEmailOtp_(payload);
     if (action === 'submitTosf') return handleSubmitTosf_(payload);
+    if (action === 'listMySubmissions') return handleListMySubmissions_(payload);
+    if (action === 'updateMySubmission') return handleUpdateMySubmission_(payload);
+    if (action === 'voidMySubmission') return handleVoidMySubmission_(payload);
     if (action === 'adminLogin') return handleAdminLogin_(payload);
     if (action === 'listTosfSubmissions') return handleListTosfSubmissions_(payload);
     if (action === 'setPortalStatus') return handleSetPortalStatus_(payload);
@@ -386,6 +389,131 @@ function findHeiFromMaster_(uii, heiName, expectedRegionCode) {
   return null;
 }
 
+// ---- Submitter self-service (OTP-verified, own rows only) ----
+
+function handleListMySubmissions_(payload) {
+  payload = payload || {};
+  var config = getConfig_();
+  var otpUser = verifyOtpSessionToken_(payload.otpSessionToken, config);
+  var email = otpUser.email;
+
+  var sheet = getSubmissionsSheet_(config);
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length < 2) return jsonOutput_({ ok: true, rows: [], email: email });
+
+  var headers = values[0];
+  var rows = [];
+  for (var i = 1; i < values.length; i++) {
+    var obj = rowToObject_(headers, values[i]);
+    if (normalizeEmail_(obj.Submitted_By_Email) !== email) continue;
+    if (isTruthyFlag_(obj.Voided)) continue;
+    rows.push(submissionObjectToPayload_(obj));
+  }
+  rows.sort(function (a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });
+  return jsonOutput_({ ok: true, rows: rows, email: email });
+}
+
+function handleUpdateMySubmission_(payload) {
+  payload = payload || {};
+  var config = getConfig_();
+  var otpUser = verifyOtpSessionToken_(payload.otpSessionToken, config);
+  var email = otpUser.email;
+  var submissionId = cleanText_(payload.submissionId, 80);
+  if (!submissionId) throw new Error('Missing submission reference.');
+
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var sheet = getSubmissionsSheet_(config);
+    var located = locateSubmissionRow_(sheet, submissionId);
+    if (!located) throw new Error('Submission not found.');
+    if (normalizeEmail_(located.obj.Submitted_By_Email) !== email) throw new Error('You can only edit your own submissions.');
+    if (isTruthyFlag_(located.obj.Voided)) throw new Error('This submission was deleted and can no longer be edited.');
+
+    var proposedTf = nullableNumber_(payload.proposedTfIncrease, 'Proposed TF Increase');
+    var proposedOsf = nullableNumber_(payload.proposedOsfIncrease, 'Proposed OSF Increase');
+    if (proposedTf === null && proposedOsf === null) throw new Error('At least one proposed increase is required.');
+    if (proposedTf !== null && proposedTf < 0) throw new Error('Proposed TF Increase cannot be negative.');
+    if (proposedOsf !== null && proposedOsf < 0) throw new Error('Proposed OSF Increase cannot be negative.');
+
+    var actionStatus = cleanText_(payload.actionStatus, 120);
+    if (ACTION_STATUS_OPTIONS.indexOf(actionStatus) === -1) throw new Error('Invalid action/status.');
+    var otherSpecifics = cleanText_(payload.otherSpecifics, 1000);
+    if (actionStatus === 'Others' && !otherSpecifics) throw new Error('Please indicate specifics when action/status is Others.');
+    if (actionStatus !== 'Others') otherSpecifics = '';
+    var remarks = cleanText_(payload.remarks, 2500);
+
+    var rirCategory = computeRirCategory_(proposedTf, proposedOsf, numberOrNull_(located.obj.RIR));
+
+    var now = formatDateTime_(new Date());
+    setCell_(sheet, located, 'Proposed_TF_Increase', proposedTf === null ? '' : proposedTf);
+    setCell_(sheet, located, 'Proposed_OSF_Increase', proposedOsf === null ? '' : proposedOsf);
+    setCell_(sheet, located, 'RIR_Category', rirCategory);
+    setCell_(sheet, located, 'Action_Status', actionStatus);
+    setCell_(sheet, located, 'Other_Specifics', otherSpecifics);
+    setCell_(sheet, located, 'Remarks', remarks);
+    setCell_(sheet, located, 'Updated_At', now);
+    setCell_(sheet, located, 'Updated_By', email);
+
+    auditLog_('submission_updated', 'ok', submissionId, email, 'Self-service edit.');
+    return jsonOutput_({ ok: true, message: 'Submission updated.', submissionId: submissionId, rirCategory: rirCategory });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleVoidMySubmission_(payload) {
+  payload = payload || {};
+  var config = getConfig_();
+  var otpUser = verifyOtpSessionToken_(payload.otpSessionToken, config);
+  var email = otpUser.email;
+  var submissionId = cleanText_(payload.submissionId, 80);
+  if (!submissionId) throw new Error('Missing submission reference.');
+
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var sheet = getSubmissionsSheet_(config);
+    var located = locateSubmissionRow_(sheet, submissionId);
+    if (!located) throw new Error('Submission not found.');
+    if (normalizeEmail_(located.obj.Submitted_By_Email) !== email) throw new Error('You can only delete your own submissions.');
+    if (isTruthyFlag_(located.obj.Voided)) return jsonOutput_({ ok: true, message: 'Submission already deleted.', submissionId: submissionId });
+
+    var now = formatDateTime_(new Date());
+    setCell_(sheet, located, 'Voided', 'TRUE');
+    setCell_(sheet, located, 'Voided_At', now);
+    setCell_(sheet, located, 'Updated_At', now);
+    setCell_(sheet, located, 'Updated_By', email);
+
+    auditLog_('submission_voided', 'ok', submissionId, email, 'Self-service delete (soft).');
+    return jsonOutput_({ ok: true, message: 'Submission deleted.', submissionId: submissionId });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Finds a submission row by ID. Returns { rowIndex (1-based), map, obj } or null.
+function locateSubmissionRow_(sheet, submissionId) {
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length < 2) return null;
+  var headers = values[0];
+  var map = columnMap_(headers);
+  if (map.Submission_ID === undefined) return null;
+  var target = cleanText_(submissionId, 80);
+  for (var i = 1; i < values.length; i++) {
+    if (cleanText_(values[i][map.Submission_ID], 80) === target) {
+      return { rowIndex: i + 1, map: map, obj: rowToObject_(headers, values[i]) };
+    }
+  }
+  return null;
+}
+
+function setCell_(sheet, located, headerKey, value) {
+  var col = located.map[headerKey];
+  if (col === undefined) return;
+  sheet.getRange(located.rowIndex, col + 1).setValue(value);
+}
+
 function handleAdminLogin_(payload) {
   payload = payload || {};
   var email = normalizeEmail_(payload.email);
@@ -420,6 +548,7 @@ function handleListTosfSubmissions_(payload) {
   var rows = [];
   for (var i = 1; i < values.length; i++) {
     var obj = rowToObject_(headers, values[i]);
+    if (isTruthyFlag_(obj.Voided)) continue; // soft-deleted rows are excluded from counts
     rows.push(submissionObjectToPayload_(obj));
   }
 
@@ -460,7 +589,9 @@ function getSubmissionHeaders_() {
     'Updated_At',
     'Updated_By',
     'Source_User_Agent',
-    'Client_Origin'
+    'Client_Origin',
+    'Voided',
+    'Voided_At'
   ];
 }
 
@@ -490,7 +621,9 @@ function submissionToRow_(headers, data) {
     Updated_At: formatDateTime_(data.updatedAt),
     Updated_By: data.updatedBy,
     Source_User_Agent: data.userAgent,
-    Client_Origin: data.clientOrigin
+    Client_Origin: data.clientOrigin,
+    Voided: '',
+    Voided_At: ''
   };
   return headers.map(function (header) { return map[header] !== undefined ? map[header] : ''; });
 }
@@ -518,7 +651,9 @@ function submissionObjectToPayload_(obj) {
     submittedByPosition: String(obj.Submitted_By_Position || ''),
     submittedByContact: String(obj.Submitted_By_Contact || ''),
     updatedAt: formatDateTime_(obj.Updated_At),
-    updatedBy: String(obj.Updated_By || '')
+    updatedBy: String(obj.Updated_By || ''),
+    voided: isTruthyFlag_(obj.Voided),
+    voidedAt: formatDateTime_(obj.Voided_At)
   };
 }
 

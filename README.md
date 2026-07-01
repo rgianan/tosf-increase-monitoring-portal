@@ -8,6 +8,10 @@
 6. CHEDRO selects action/status, adds the HEI to the review table, and may edit or remove the row.
 7. CHEDRO repeats the HEI entry steps as needed, then submits the batch.
 
+## Manage previous submissions
+
+After verifying their email, a CHEDRO can open **Manage previous submissions** on the public form to review, edit, or delete entries they filed with that email. Edits update the proposed increases, action/status, specifics, and remarks (the RIR category is recomputed server-side). Deletes are soft: the row is flagged `Voided` and excluded from the admin dashboard and CSV export, but retained in the sheet for audit. All operations require the OTP-verified session and only affect rows owned by that email.
+
 ## Admin dashboard
 
 The admin dashboard provides:
