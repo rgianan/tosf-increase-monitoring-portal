@@ -25,6 +25,7 @@ export const ACTION_STATUS_OPTIONS = [
   'HEI will proceed with AY 2026-2027',
   'Decrease: within RIR',
   'Decrease: from above RIR to within RIR',
+  'Application below the RIR is decreased',
   'Under consideration, pending final decision',
   'No response from HEI',
   'Others',

@@ -66,7 +66,8 @@ const statusCounts = computed(() => countBy(rows.value, 'actionStatus'))
 const rirCounts = computed(() => countBy(rows.value, 'rirCategory'))
 const decreaseTotal = computed(() =>
   (statusCounts.value['Decrease: within RIR'] || 0) +
-  (statusCounts.value['Decrease: from above RIR to within RIR'] || 0),
+  (statusCounts.value['Decrease: from above RIR to within RIR'] || 0) +
+  (statusCounts.value['Application below the RIR is decreased'] || 0),
 )
 
 const summaryItems = computed(() => [
@@ -81,6 +82,7 @@ const summaryItems = computed(() => [
   { label: 'HEIs which decreased their RIR', value: decreaseTotal.value },
   { label: 'Decrease: within RIR', value: statusCounts.value['Decrease: within RIR'] || 0, indent: true },
   { label: 'Decrease: from above RIR to within RIR', value: statusCounts.value['Decrease: from above RIR to within RIR'] || 0, indent: true },
+  { label: 'Application below the RIR is decreased', value: statusCounts.value['Application below the RIR is decreased'] || 0, indent: true },
   { label: 'HEI under consideration, pending final decision', value: statusCounts.value['Under consideration, pending final decision'] || 0 },
   { label: 'No Response from HEI', value: statusCounts.value['No response from HEI'] || 0 },
   { label: 'Others', value: statusCounts.value.Others || 0 },
@@ -100,7 +102,7 @@ const regionalSummary = computed(() => REGION_META.map((region) => {
     denied: regionStatus['CHEDRO Denied'] || 0,
     defer: regionStatus['HEI agreed to defer implementation'] || 0,
     proceed: regionStatus['HEI will proceed with AY 2026-2027'] || 0,
-    decreased: (regionStatus['Decrease: within RIR'] || 0) + (regionStatus['Decrease: from above RIR to within RIR'] || 0),
+    decreased: (regionStatus['Decrease: within RIR'] || 0) + (regionStatus['Decrease: from above RIR to within RIR'] || 0) + (regionStatus['Application below the RIR is decreased'] || 0),
     pending: regionStatus['Under consideration, pending final decision'] || 0,
     noResponse: regionStatus['No response from HEI'] || 0,
     others: regionStatus.Others || 0,

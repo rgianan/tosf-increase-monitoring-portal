@@ -25,7 +25,7 @@ Open Apps Script from the Sheet, paste `Code.gs`, then set Script Properties:
 | `SUBMIT_SHARED_TOKEN` | No | Match `VITE_SUBMIT_SHARED_TOKEN` if you use it |
 | `PORTAL_OPEN` | No | `TRUE` or `FALSE`; defaults to `TRUE` |
 | `SESSION_SECRET` | No | Auto-generated if missing |
-| `ALLOWED_HD` | No | Email domain to restrict public OTP verification (e.g. `ched.gov.ph`). Blank = any email domain |
+| `ALLOWED_EMAIL_DOMAIN` | No | Email domain to restrict public OTP verification (e.g. `ched.gov.ph`). Blank = any email domain |
 
 Run `setupProject_()` once.
 
@@ -35,7 +35,7 @@ The public form verifies submitters by email OTP and does not require Google Clo
 
 When a user requests a code, Apps Script sends a 6-digit passcode using `MailApp`. The code expires after 10 minutes. After verification, the form receives a short-lived OTP session token used for final submission.
 
-To restrict submissions to a domain, set `ALLOWED_HD` in Apps Script and `VITE_ALLOWED_EMAIL_DOMAIN` in the frontend environment. The frontend setting is only a hint; Apps Script enforces the restriction.
+To restrict submissions to a domain, set `ALLOWED_EMAIL_DOMAIN` in Apps Script and `VITE_ALLOWED_EMAIL_DOMAIN` in the frontend environment. The frontend setting is only a hint; Apps Script enforces the restriction.
 
 > Note: OTP delivery uses `MailApp`, so the script needs permission to send email. Run any function once in the editor after pasting the code and approve the permission prompt.
 
