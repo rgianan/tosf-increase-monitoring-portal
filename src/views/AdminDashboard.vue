@@ -128,18 +128,20 @@ function restoreSession() {
 
 async function adminLogin() {
   loginError.value = ''
+  loading.value = true
   try {
-    loading.value = true
     const data = await postJson({ action: 'adminLogin', email: login.email, password: login.password })
     session.value = { token: data.token, email: data.email, displayName: data.displayName, role: data.role }
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session.value))
     login.password = ''
-    await loadSubmissions()
   } catch (err) {
     loginError.value = err?.message || 'Login failed.'
-  } finally {
     loading.value = false
+    return
   }
+  // Auth succeeded: show the dashboard now and fetch rows in the background.
+  // loadSubmissions keeps `loading` true until the rows arrive.
+  loadSubmissions()
 }
 
 function logout() {

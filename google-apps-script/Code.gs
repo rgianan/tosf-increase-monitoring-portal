@@ -22,7 +22,12 @@ var OTP_TTL_SECONDS = 10 * 60;
 var OTP_SESSION_TTL_SECONDS = 2 * 60 * 60;
 var OTP_REQUEST_COOLDOWN_SECONDS = 60;
 var OTP_MAX_ATTEMPTS = 5;
-var PASSWORD_HASH_ITERATIONS = 15000;
+// Iterations for newly seeded (v2) password records. Kept modest because Apps
+// Script's HMAC has high per-call overhead; combined with byte-array hashing
+// (no per-iteration base64) this keeps admin login fast. Tune higher for more
+// brute-force resistance at the cost of login latency. Old v1 records keep the
+// iteration count embedded in their own record.
+var PASSWORD_HASH_ITERATIONS = 4096;
 var SUBMISSION_ID_PREFIX = 'TOSF';
 
 var REGION_META = [
@@ -734,6 +739,8 @@ function getSessionSecret_() {
   return secret;
 }
 
+// Legacy v1 hashing: re-encodes to base64 each round (two Utilities calls per
+// iteration). Kept only so existing v1 records still verify.
 function hashPassword_(password, salt, iterations) {
   var bytes = Utilities.computeHmacSha256Signature(String(password), salt);
   for (var i = 1; i < iterations; i++) {
@@ -742,20 +749,38 @@ function hashPassword_(password, salt, iterations) {
   return bytesToBase64_(bytes);
 }
 
+// v2 hashing: iterate on raw bytes (one HMAC call per iteration, no base64),
+// roughly halving the work versus v1 for the same iteration count.
+function hashPasswordFast_(password, salt, iterations) {
+  var saltBytes = Utilities.newBlob(String(salt)).getBytes();
+  var bytes = Utilities.computeHmacSha256Signature(String(password), String(salt));
+  for (var i = 1; i < iterations; i++) {
+    bytes = Utilities.computeHmacSha256Signature(bytes, saltBytes);
+  }
+  return Utilities.base64Encode(bytes);
+}
+
 function makePasswordRecord_(password) {
   var salt = Utilities.getUuid() + Utilities.getUuid();
   var iterations = PASSWORD_HASH_ITERATIONS;
-  var hash = hashPassword_(password, salt, iterations);
-  return ['v1', iterations, salt, hash].join('$');
+  var hash = hashPasswordFast_(password, salt, iterations);
+  return ['v2', iterations, salt, hash].join('$');
 }
 
 function verifyPassword_(password, record) {
   var parts = String(record || '').split('$');
-  if (parts.length !== 4 || parts[0] !== 'v1') return false;
+  if (parts.length !== 4) return false;
+  var version = parts[0];
   var iterations = Number(parts[1]);
   var salt = parts[2];
   var expected = parts[3];
-  var actual = hashPassword_(password, salt, iterations);
+  if (!iterations || iterations < 1) return false;
+
+  var actual;
+  if (version === 'v2') actual = hashPasswordFast_(password, salt, iterations);
+  else if (version === 'v1') actual = hashPassword_(password, salt, iterations);
+  else return false;
+
   return constantTimeEquals_(actual, expected);
 }
 
