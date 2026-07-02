@@ -638,7 +638,7 @@ onMounted(() => {
           <p class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">CHEDRO Entry Form</p>
           <h2 class="mt-2 text-2xl font-bold text-slate-950">TOSF Increase Monitoring</h2>
           <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            Add one or more HEIs from the uploaded CSV masterlist, review them in the table, then submit the batch. The RIR category is computed automatically from the applicable regional inflation rate.
+            Add one or more HEIs from the uploaded masterlist, review them in the table, then submit the batch. The RIR category is computed automatically from the applicable regional inflation rate.
           </p>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
