@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { API_URL, SUBMIT_TOKEN, postJson } from '../lib/api.js'
 import { parseCsv } from '../lib/csv.js'
 import {
@@ -38,6 +38,14 @@ const otp = reactive({
   error: '',
 })
 const emailVerified = computed(() => !!otp.sessionToken && !!otp.verifiedEmail)
+
+// Draft autosave: the in-progress batch (region + added HEIs + submitter info)
+// is persisted to localStorage so a reload or crash does not lose the table.
+// The OTP session and certification checkbox are intentionally not persisted.
+const DRAFT_KEY = 'tosf_form_draft'
+const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const pendingDraft = ref(null)
+let restoringDraft = false
 
 // Self-service management of the signed-in submitter's previous rows.
 const managing = ref(false)
@@ -132,6 +140,7 @@ const highestIncrease = computed(() => {
 const rirCategory = computed(() => computeRirCategory(entryForm.proposedTfIncrease, entryForm.proposedOsfIncrease, rir.value))
 
 watch(() => form.regionCode, () => {
+  if (restoringDraft) return
   addedEntries.value = []
   resetEntryForm()
 })
@@ -151,6 +160,89 @@ watch(emailVerified, (value) => {
     myMessage.value = ''
   }
 })
+
+function readDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const draft = JSON.parse(raw)
+    if (!draft || draft.v !== 1) return null
+    if (!draft.savedAt || Date.now() - draft.savedAt > DRAFT_TTL_MS) return null
+    const entries = Array.isArray(draft.entries) ? draft.entries.filter((entry) => entry?.hei?.name) : []
+    if (!draft.regionCode && !entries.length) return null
+    return { ...draft, entries }
+  } catch {
+    return null
+  }
+}
+
+function saveDraft() {
+  if (restoringDraft || submitting.value) return
+  try {
+    const meaningful = form.regionCode || addedEntries.value.length || form.submittedByName || form.submittedByPosition || form.submittedByContact
+    if (!meaningful) {
+      localStorage.removeItem(DRAFT_KEY)
+      return
+    }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      v: 1,
+      savedAt: Date.now(),
+      regionCode: form.regionCode,
+      entries: addedEntries.value,
+      submitter: {
+        name: form.submittedByName,
+        position: form.submittedByPosition,
+        contact: form.submittedByContact,
+        email: otp.verifiedEmail || otp.email,
+      },
+    }))
+  } catch {
+    // Storage full or blocked (private mode): autosave is best-effort only.
+  }
+}
+
+function clearDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY)
+  } catch {}
+  pendingDraft.value = null
+}
+
+async function restoreDraft() {
+  const draft = pendingDraft.value
+  if (!draft) return
+  restoringDraft = true
+  form.regionCode = draft.regionCode || ''
+  addedEntries.value = draft.entries || []
+  form.submittedByName = draft.submitter?.name || ''
+  form.submittedByPosition = draft.submitter?.position || ''
+  form.submittedByContact = draft.submitter?.contact || ''
+  if (!emailVerified.value && draft.submitter?.email) otp.email = draft.submitter.email
+  await nextTick()
+  restoringDraft = false
+  pendingDraft.value = null
+  saveDraft()
+}
+
+function discardDraft() {
+  clearDraft()
+}
+
+const draftSavedLabel = computed(() => {
+  if (!pendingDraft.value?.savedAt) return ''
+  try {
+    return new Date(pendingDraft.value.savedAt).toLocaleString()
+  } catch {
+    return ''
+  }
+})
+
+// Autosave whenever the draft-relevant state changes.
+watch(
+  [() => form.regionCode, addedEntries, () => form.submittedByName, () => form.submittedByPosition, () => form.submittedByContact],
+  saveDraft,
+  { deep: true },
+)
 
 async function loadPortalStatus() {
   if (!API_URL) return
@@ -437,6 +529,7 @@ async function submitForm() {
     submissionId.value = Array.isArray(data.submissionIds) ? data.submissionIds.join(', ') : (data.submissionId || '')
     submitSuccess.value = data.message || 'TOSF monitoring submission recorded.'
     resetForm()
+    clearDraft()
   } catch (err) {
     submitError.value = err?.message || 'Submission failed.'
   } finally {
@@ -533,6 +626,7 @@ async function voidRow(row) {
 onMounted(() => {
   loadSchoolsFromCsv()
   loadPortalStatus()
+  pendingDraft.value = readDraft()
 })
 </script>
 
@@ -566,6 +660,19 @@ onMounted(() => {
       <div v-if="submitSuccess" class="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
         <p class="font-semibold">{{ submitSuccess }}</p>
         <p v-if="submissionId" class="mt-1 font-mono text-xs">Reference No.: {{ submissionId }}</p>
+      </div>
+
+      <div v-if="pendingDraft" class="mt-5 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p class="font-semibold">You have an unsubmitted draft<span v-if="draftSavedLabel"> from {{ draftSavedLabel }}</span>.</p>
+          <p class="mt-0.5 text-xs text-indigo-700">
+            {{ pendingDraft.entries.length }} HEI{{ pendingDraft.entries.length === 1 ? '' : 's' }} in the review table{{ pendingDraft.regionCode ? ` • ${getRegionByCode(pendingDraft.regionCode)?.shortName || 'Region'}` : '' }}
+          </p>
+        </div>
+        <div class="flex shrink-0 gap-2">
+          <button type="button" class="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-500" @click="restoreDraft">Restore draft</button>
+          <button type="button" class="rounded-xl border border-indigo-300 bg-white px-4 py-2 text-xs font-bold text-indigo-800 transition hover:border-indigo-500" @click="discardDraft">Discard</button>
+        </div>
       </div>
 
       <div class="mt-6 grid grid-cols-1 gap-5">
