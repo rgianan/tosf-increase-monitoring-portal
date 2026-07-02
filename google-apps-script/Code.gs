@@ -345,7 +345,14 @@ function sanitizeHei_(rawHei, expectedRegionCode) {
   if (input.regionCode && input.regionCode !== expectedRegionCode) throw new Error('Selected HEI does not belong to the selected region.');
 
   var masterHei = findHeiFromMaster_(input.uii, input.name, expectedRegionCode);
-  if (masterHei) return masterHei;
+  if (masterHei) {
+    // TOSF monitoring covers private HEIs only (HEI Type 1 in the masterlist).
+    // Skip the check when the sheet has no HEI Type column (older masterlists).
+    if (masterHei.heiType && masterHei.heiType !== '1') {
+      throw new Error('Only private HEIs are covered by TOSF increase monitoring: ' + masterHei.name + '.');
+    }
+    return masterHei;
+  }
 
   // Fallback permits development or emergency deployment before the HEI_List
   // sheet is seeded, but still enforces the region selected by the frontend CSV.
@@ -380,6 +387,7 @@ function findHeiFromMaster_(uii, heiName, expectedRegionCode) {
         name: rowName,
         uii: cleanText_(row[map.UII], 50),
         regionCode: rowRegion,
+        heiType: map.HEI_Type === undefined ? '' : cleanText_(row[map.HEI_Type], 20),
         province: cleanText_(row[map.Province], 180),
         cityMunicipality: cleanText_(row[map.City_Municipality], 180),
         status: cleanText_(row[map.Status], 80)

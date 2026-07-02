@@ -179,6 +179,9 @@ async function loadSchoolsFromCsv() {
         cityMunicipality: String(row['City/Municipality'] || '').trim(),
         status: String(row.Status || '').trim(),
       }))
+      // TOSF increase monitoring covers private HEIs only (HEI Type 1 in the
+      // masterlist; 2a/2b are SUCs, 3 are LUCs, 4b are other government HEIs).
+      .filter((row) => row.heiType === '1')
       .filter((row) => row.name && row.regionCode && REGION_META.some((region) => region.code === row.regionCode))
       .sort((a, b) => a.name.localeCompare(b.name))
   } catch (err) {
@@ -707,9 +710,12 @@ onMounted(() => {
 
         <div class="rounded-[1.5rem] border border-slate-200 p-4">
           <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h3 class="text-base font-bold text-slate-950">Added HEIs</h3>
-              <p class="mt-1 text-xs text-slate-500">Review added entries before submitting.</p>
+            <div class="flex items-start gap-3">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-black text-white">4</span>
+              <div>
+                <h3 class="text-base font-bold text-slate-950">Review Added HEIs</h3>
+                <p class="mt-1 text-xs text-slate-500">Review added entries before submitting.</p>
+              </div>
             </div>
             <p class="text-xs font-semibold text-slate-600">{{ addedHeiSummary || 'No HEIs added yet' }}</p>
           </div>
@@ -770,8 +776,13 @@ onMounted(() => {
         </div>
 
         <div class="rounded-[1.5rem] border border-slate-200 p-4">
-          <h3 class="text-base font-bold text-slate-950">Submitted by</h3>
-          <p class="mt-1 text-xs text-slate-500">Verify your official email address with a one-time passcode before submitting this report.</p>
+          <div class="flex items-start gap-3">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-black text-white">5</span>
+            <div>
+              <h3 class="text-base font-bold text-slate-950">Verify Submitter Identity</h3>
+              <p class="mt-1 text-xs text-slate-500">Verify your official email address with a one-time passcode before submitting this report.</p>
+            </div>
+          </div>
 
           <div v-if="!emailVerified" class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
             <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
@@ -833,6 +844,11 @@ onMounted(() => {
           <input v-model="form.website" tabindex="-1" autocomplete="off" />
         </label>
 
+        <div class="flex items-center gap-3">
+          <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-black text-white">6</span>
+          <h3 class="text-base font-bold text-slate-950">Certify and Submit</h3>
+        </div>
+
         <label class="flex gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
           <input v-model="form.certification" type="checkbox" class="mt-1 h-4 w-4 rounded border-slate-300" />
           <span>I certify that the encoded data are based on the CHEDRO's monitoring/evaluation records for TOSF applications for AY 2026-2027.</span>
@@ -866,7 +882,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <p v-if="!emailVerified" class="mt-3 text-sm text-slate-500">Verify your email in the <strong>Submitted by</strong> section above to view and manage your previous submissions.</p>
+          <p v-if="!emailVerified" class="mt-3 text-sm text-slate-500">Verify your email in step <strong>5 — Verify Submitter Identity</strong> above to view and manage your previous submissions.</p>
 
           <template v-else-if="managing">
             <div v-if="myError" class="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800">{{ myError }}</div>
