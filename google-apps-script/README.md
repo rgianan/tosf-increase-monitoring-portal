@@ -25,6 +25,7 @@ Open Apps Script from the Sheet, paste `Code.gs`, then set Script Properties:
 | `SUBMIT_SHARED_TOKEN` | No | Match `VITE_SUBMIT_SHARED_TOKEN` if you use it |
 | `PORTAL_OPEN` | No | `TRUE` or `FALSE`; defaults to `TRUE` |
 | `SESSION_SECRET` | No | Auto-generated if missing |
+| `PASSWORD_PEPPER` | No | Auto-generated; keys password hashes. Changing or deleting it invalidates all passwords (re-seed users) |
 | `ALLOWED_EMAIL_DOMAIN` | No | Email domain to restrict public OTP verification (e.g. `ched.gov.ph`). Blank = any email domain |
 
 Run `setupProject_()` once.
