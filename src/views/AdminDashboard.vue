@@ -117,6 +117,125 @@ function countBy(items, key) {
   }, {})
 }
 
+// ---- Analytics tab (SVG/CSS charts, no chart library) ----
+
+const DONUT_COLORS = {
+  'Below the applicable RIR': '#10b981',
+  'Equivalent to the applicable RIR': '#f59e0b',
+  'Higher than the RIR': '#e11d48',
+  Blank: '#cbd5e1',
+}
+
+const rirDonut = computed(() => {
+  const total = rows.value.length
+  const circumference = 2 * Math.PI * 48
+  let consumed = 0
+  const segments = [...RIR_CATEGORY_OPTIONS, 'Blank']
+    .map((label) => {
+      const count = rirCounts.value[label] || 0
+      const frac = total ? count / total : 0
+      const segment = {
+        label: label === 'Blank' ? 'Uncategorized' : label,
+        count,
+        pct: total ? Math.round(frac * 100) : 0,
+        color: DONUT_COLORS[label],
+        dash: `${frac * circumference} ${circumference - frac * circumference}`,
+        offset: -consumed,
+      }
+      consumed += frac * circumference
+      return segment
+    })
+    .filter((segment) => segment.count > 0)
+  return { total, segments, circumference }
+})
+
+const statusBars = computed(() => {
+  const entries = ACTION_STATUS_OPTIONS
+    .map((label) => ({ label, count: statusCounts.value[label] || 0 }))
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count)
+  const max = Math.max(1, ...entries.map((entry) => entry.count))
+  return entries.map((entry) => ({ ...entry, widthPct: Math.max(2, Math.round((entry.count / max) * 100)) }))
+})
+
+// All 17 regions kept (zero bars included) so non-submitting regions stand out.
+const regionActivity = computed(() => {
+  const max = Math.max(1, ...regionalSummary.value.map((region) => region.total))
+  return regionalSummary.value.map((region) => ({
+    code: region.code,
+    shortName: region.shortName,
+    total: region.total,
+    higher: region.higher,
+    totalPct: (region.total / max) * 100,
+    higherPct: (region.higher / max) * 100,
+  }))
+})
+
+const increaseStats = computed(() => {
+  const tf = []
+  const osf = []
+  const highest = []
+  rows.value.forEach((row) => {
+    if (typeof row.proposedTfIncrease === 'number') tf.push(row.proposedTfIncrease)
+    if (typeof row.proposedOsfIncrease === 'number') osf.push(row.proposedOsfIncrease)
+    const h = Math.max(row.proposedTfIncrease ?? -Infinity, row.proposedOsfIncrease ?? -Infinity)
+    if (h !== -Infinity) highest.push(h)
+  })
+  const avg = (list) => (list.length ? list.reduce((sum, v) => sum + v, 0) / list.length : null)
+  const median = (list) => {
+    if (!list.length) return null
+    const sorted = [...list].sort((a, b) => a - b)
+    const mid = Math.floor(sorted.length / 2)
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+  }
+  return {
+    avgTf: avg(tf),
+    avgOsf: avg(osf),
+    medianHighest: median(highest),
+    maxHighest: highest.length ? Math.max(...highest) : null,
+    highest,
+  }
+})
+
+const HISTOGRAM_LABELS = ['0–1', '1–2', '2–3', '3–4', '4–5', '5–6', '6–7', '7–8', '8–9', '9–10', '10+']
+
+const increaseHistogram = computed(() => {
+  const counts = new Array(HISTOGRAM_LABELS.length).fill(0)
+  increaseStats.value.highest.forEach((value) => {
+    counts[Math.min(HISTOGRAM_LABELS.length - 1, Math.max(0, Math.floor(value)))] += 1
+  })
+  const max = Math.max(1, ...counts)
+  return counts.map((count, index) => ({ label: HISTOGRAM_LABELS[index], count, heightPct: (count / max) * 100 }))
+})
+
+const timelineChart = computed(() => {
+  const byDay = {}
+  rows.value.forEach((row) => {
+    const day = String(row.timestamp || '').slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) byDay[day] = (byDay[day] || 0) + 1
+  })
+  const days = Object.keys(byDay).sort()
+  if (!days.length) return null
+  const W = 600
+  const H = 140
+  const PAD = 12
+  const max = Math.max(...days.map((day) => byDay[day]))
+  const points = days.map((day, index) => ({
+    x: days.length === 1 ? W / 2 : PAD + (index * (W - PAD * 2)) / (days.length - 1),
+    y: H - PAD - ((byDay[day] / max) * (H - PAD * 2)),
+    date: day,
+    count: byDay[day],
+  }))
+  const line = points.map((p) => `${p.x},${p.y}`).join(' ')
+  const area = [`M ${points[0].x} ${H - PAD}`, ...points.map((p) => `L ${p.x} ${p.y}`), `L ${points[points.length - 1].x} ${H - PAD}`, 'Z'].join(' ')
+  return { points, line, area, max, W, H, first: days[0], last: days[days.length - 1] }
+})
+
+function fmtPct(value) {
+  if (value === null || value === undefined) return '—'
+  return `${Math.round(value * 100) / 100}%`
+}
+
 function restoreSession() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null')
@@ -323,6 +442,7 @@ onMounted(async () => {
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'summary' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'summary'">Summary</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'regions' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'regions'">Regional Table</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'details' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'details'">HEI Details</button>
+            <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'analytics' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'analytics'">Analytics</button>
           </div>
           <p class="text-sm text-slate-500">{{ filteredRows.length }} matching rows</p>
         </div>
@@ -364,7 +484,7 @@ onMounted(async () => {
           </table>
         </div>
 
-        <div v-else class="p-5">
+        <div v-else-if="activeTab === 'details'" class="p-5">
           <div class="grid gap-3 lg:grid-cols-4">
             <select v-model="filters.regionCode" class="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All regions</option><option v-for="region in REGION_META" :key="region.code" :value="region.code">{{ region.shortName }}</option></select>
             <select v-model="filters.rirCategory" class="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All RIR categories</option><option v-for="category in RIR_CATEGORY_OPTIONS" :key="category" :value="category">{{ category }}</option></select>
@@ -414,6 +534,127 @@ onMounted(async () => {
               <span>Page {{ currentPage }} of {{ totalPages }}</span>
             </div>
           </div>
+        </div>
+
+        <div v-else class="p-5">
+          <div v-if="!rows.length" class="rounded-2xl border border-slate-200 px-4 py-12 text-center">
+            <p class="text-sm font-semibold text-slate-700">No submissions yet</p>
+            <p class="mt-1 text-xs text-slate-400">Charts will appear here once CHEDROs start submitting TOSF monitoring entries.</p>
+          </div>
+
+          <template v-else>
+            <div class="grid gap-4 md:grid-cols-4">
+              <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">Average TF increase</p>
+                <p class="mt-1 text-2xl font-black text-slate-950">{{ fmtPct(increaseStats.avgTf) }}</p>
+              </div>
+              <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">Average OSF increase</p>
+                <p class="mt-1 text-2xl font-black text-slate-950">{{ fmtPct(increaseStats.avgOsf) }}</p>
+              </div>
+              <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">Median highest increase</p>
+                <p class="mt-1 text-2xl font-black text-slate-950">{{ fmtPct(increaseStats.medianHighest) }}</p>
+              </div>
+              <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">Highest proposed increase</p>
+                <p class="mt-1 text-2xl font-black text-rose-700">{{ fmtPct(increaseStats.maxHighest) }}</p>
+              </div>
+            </div>
+
+            <div class="mt-5 grid gap-5 lg:grid-cols-2">
+              <div class="rounded-2xl border border-slate-200 p-5">
+                <h4 class="text-sm font-bold text-slate-950">RIR Category Mix</h4>
+                <div class="mt-4 flex flex-col items-center gap-6 sm:flex-row">
+                  <svg viewBox="0 0 120 120" class="h-36 w-36 shrink-0" role="img" aria-label="RIR category distribution">
+                    <circle cx="60" cy="60" r="48" fill="none" stroke="#f1f5f9" stroke-width="16" />
+                    <circle
+                      v-for="segment in rirDonut.segments"
+                      :key="segment.label"
+                      cx="60" cy="60" r="48" fill="none"
+                      :stroke="segment.color" stroke-width="16"
+                      :stroke-dasharray="segment.dash" :stroke-dashoffset="segment.offset"
+                      transform="rotate(-90 60 60)"
+                    />
+                    <text x="60" y="57" text-anchor="middle" class="fill-slate-950" style="font-size: 20px; font-weight: 800;">{{ rirDonut.total }}</text>
+                    <text x="60" y="74" text-anchor="middle" class="fill-slate-400" style="font-size: 9px;">applications</text>
+                  </svg>
+                  <ul class="w-full space-y-2 text-sm">
+                    <li v-for="segment in rirDonut.segments" :key="segment.label" class="flex items-center justify-between gap-3">
+                      <span class="flex min-w-0 items-center gap-2">
+                        <span class="h-3 w-3 shrink-0 rounded-full" :style="{ backgroundColor: segment.color }"></span>
+                        <span class="truncate text-slate-700">{{ segment.label }}</span>
+                      </span>
+                      <span class="shrink-0 font-bold text-slate-950">{{ segment.count }} <span class="font-normal text-slate-400">({{ segment.pct }}%)</span></span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div class="rounded-2xl border border-slate-200 p-5">
+                <h4 class="text-sm font-bold text-slate-950">Action / Status Breakdown</h4>
+                <ul class="mt-4 space-y-3">
+                  <li v-for="bar in statusBars" :key="bar.label">
+                    <div class="flex items-center justify-between gap-3 text-xs">
+                      <span class="truncate text-slate-600">{{ bar.label }}</span>
+                      <span class="shrink-0 font-bold text-slate-950">{{ bar.count }}</span>
+                    </div>
+                    <div class="mt-1 h-2.5 w-full rounded-full bg-slate-100">
+                      <div class="h-2.5 rounded-full bg-indigo-600" :style="{ width: `${bar.widthPct}%` }"></div>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="rounded-2xl border border-slate-200 p-5">
+                <h4 class="text-sm font-bold text-slate-950">Submissions by Region</h4>
+                <p class="mt-1 text-xs text-slate-400">
+                  <span class="mr-3 inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-indigo-600"></span>Total</span>
+                  <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-rose-600"></span>Higher than RIR</span>
+                </p>
+                <ul class="mt-4 space-y-2.5">
+                  <li v-for="region in regionActivity" :key="region.code" class="flex items-center gap-3">
+                    <span class="w-20 shrink-0 truncate text-xs text-slate-600">{{ region.shortName }}</span>
+                    <div class="relative h-2.5 min-w-0 flex-1 rounded-full bg-slate-100">
+                      <div class="absolute inset-y-0 left-0 rounded-full bg-indigo-600" :style="{ width: `${region.totalPct}%` }"></div>
+                      <div class="absolute inset-y-0 left-0 rounded-full bg-rose-600" :style="{ width: `${region.higherPct}%` }"></div>
+                    </div>
+                    <span class="w-8 shrink-0 text-right text-xs font-bold text-slate-950">{{ region.total }}</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="rounded-2xl border border-slate-200 p-5">
+                <h4 class="text-sm font-bold text-slate-950">Proposed Increase Distribution</h4>
+                <p class="mt-1 text-xs text-slate-400">Highest proposed increase per application (%)</p>
+                <div class="mt-4 flex items-end gap-1.5">
+                  <div v-for="bucket in increaseHistogram" :key="bucket.label" class="flex min-w-0 flex-1 flex-col items-center gap-1" :title="`${bucket.label}%: ${bucket.count}`">
+                    <span class="text-[10px] font-bold text-slate-500">{{ bucket.count || '' }}</span>
+                    <div class="flex h-28 w-full items-end rounded-md bg-slate-50">
+                      <div class="w-full rounded-t-md bg-indigo-500" :style="{ height: `${bucket.heightPct}%` }"></div>
+                    </div>
+                    <span class="text-[9px] text-slate-400">{{ bucket.label }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="timelineChart" class="rounded-2xl border border-slate-200 p-5 lg:col-span-2">
+                <h4 class="text-sm font-bold text-slate-950">Submissions Over Time</h4>
+                <svg :viewBox="`0 0 ${timelineChart.W} ${timelineChart.H}`" class="mt-4 w-full" role="img" aria-label="Daily submissions">
+                  <path :d="timelineChart.area" fill="#e0e7ff" />
+                  <polyline :points="timelineChart.line" fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+                  <circle v-for="point in timelineChart.points" :key="point.date" :cx="point.x" :cy="point.y" r="3.5" fill="#4f46e5">
+                    <title>{{ point.date }}: {{ point.count }}</title>
+                  </circle>
+                </svg>
+                <div class="mt-2 flex items-center justify-between text-xs text-slate-400">
+                  <span>{{ timelineChart.first }}</span>
+                  <span>Peak: {{ timelineChart.max }}/day</span>
+                  <span>{{ timelineChart.last }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </div>
