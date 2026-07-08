@@ -237,6 +237,7 @@ function handleSubmitTosf_(payload) {
     });
 
     sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+    invalidateSubmissionsCache_();
     auditLog_('tosf_submission_created', 'ok', submissionIds.join(', '), rows[0].submittedByEmail, rows[0].regionLabel + ' / ' + rows.length + ' HEI(s)');
 
     return jsonOutput_({
@@ -458,6 +459,7 @@ function handleUpdateMySubmission_(payload) {
     setCell_(sheet, located, 'Updated_At', now);
     setCell_(sheet, located, 'Updated_By', email);
 
+    invalidateSubmissionsCache_();
     auditLog_('submission_updated', 'ok', submissionId, email, 'Self-service edit.');
     return jsonOutput_({ ok: true, message: 'Submission updated.', submissionId: submissionId, rirCategory: rirCategory });
   } finally {
@@ -488,6 +490,7 @@ function handleVoidMySubmission_(payload) {
     setCell_(sheet, located, 'Updated_At', now);
     setCell_(sheet, located, 'Updated_By', email);
 
+    invalidateSubmissionsCache_();
     auditLog_('submission_voided', 'ok', submissionId, email, 'Self-service delete (soft).');
     return jsonOutput_({ ok: true, message: 'Submission deleted.', submissionId: submissionId });
   } finally {
@@ -551,12 +554,28 @@ function handleAdminLogin_(payload) {
   });
 }
 
+// Full-sheet scan + rebuild is expensive and was previously run from scratch
+// on every admin load. Under concurrent traffic (several admins refreshing,
+// or writers holding the document lock) that means every request re-pays the
+// full cost and competes for Apps Script's shared simultaneous-execution
+// quota. Cache the processed { rows, summary } for a short TTL so concurrent
+// or repeated loads are served without touching the Sheets API at all;
+// writes proactively invalidate it so admins still see fresh data promptly.
+var SUBMISSIONS_CACHE_KEY_ = 'tosf_submissions_list_v1';
+var SUBMISSIONS_CACHE_TTL_SECONDS_ = 30;
+
 function handleListTosfSubmissions_(payload) {
   requireAdmin_(payload);
   var config = getConfig_();
+  var cached = readSubmissionsCache_();
+  if (cached) return jsonOutput_({ ok: true, rows: cached.rows, portalOpen: config.portalOpen, summary: cached.summary });
+
   var sheet = getSubmissionsSheet_(config);
   var values = sheet.getDataRange().getValues();
-  if (!values || values.length < 2) return jsonOutput_({ ok: true, rows: [], portalOpen: config.portalOpen, summary: buildSummary_([]) });
+  if (!values || values.length < 2) {
+    writeSubmissionsCache_([], buildSummary_([]));
+    return jsonOutput_({ ok: true, rows: [], portalOpen: config.portalOpen, summary: buildSummary_([]) });
+  }
 
   var headers = values[0];
   var rows = [];
@@ -567,7 +586,35 @@ function handleListTosfSubmissions_(payload) {
   }
 
   rows.sort(function (a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });
-  return jsonOutput_({ ok: true, rows: rows, portalOpen: config.portalOpen, summary: buildSummary_(rows) });
+  var summary = buildSummary_(rows);
+  writeSubmissionsCache_(rows, summary);
+  return jsonOutput_({ ok: true, rows: rows, portalOpen: config.portalOpen, summary: summary });
+}
+
+function readSubmissionsCache_() {
+  try {
+    var raw = CacheService.getScriptCache().get(SUBMISSIONS_CACHE_KEY_);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeSubmissionsCache_(rows, summary) {
+  try {
+    var payload = JSON.stringify({ rows: rows, summary: summary });
+    // CacheService values are capped at 100KB; skip caching rather than error
+    // once the dataset outgrows that (the list still works, just uncached).
+    if (payload.length < 95000) CacheService.getScriptCache().put(SUBMISSIONS_CACHE_KEY_, payload, SUBMISSIONS_CACHE_TTL_SECONDS_);
+  } catch (err) {
+    // Best-effort: caching is a speed optimization, never a correctness requirement.
+  }
+}
+
+function invalidateSubmissionsCache_() {
+  try {
+    CacheService.getScriptCache().remove(SUBMISSIONS_CACHE_KEY_);
+  } catch (err) {}
 }
 
 function handleSetPortalStatus_(payload) {
