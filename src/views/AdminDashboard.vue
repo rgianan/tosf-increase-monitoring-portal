@@ -17,7 +17,9 @@ const activeTab = ref('summary')
 const pageSize = ref(25)
 const currentPage = ref(1)
 const sort = reactive({ key: 'timestamp', dir: 'desc' })
+const regionSort = reactive({ key: '', dir: 'asc' })
 const filters = reactive({ regionCode: '', actionStatus: '', rirCategory: '', search: '' })
+const analyticsRegionCode = ref('')
 
 const isLoggedIn = computed(() => !!session.value?.token)
 const totalSubmissions = computed(() => rows.value.length)
@@ -109,6 +111,18 @@ const regionalSummary = computed(() => REGION_META.map((region) => {
   }
 }))
 
+const sortedRegionalSummary = computed(() => {
+  if (!regionSort.key) return regionalSummary.value
+  const key = regionSort.key
+  const dir = regionSort.dir === 'asc' ? 1 : -1
+  return [...regionalSummary.value].sort((a, b) => {
+    const av = a[key] ?? ''
+    const bv = b[key] ?? ''
+    if (typeof av === 'number' || typeof bv === 'number') return ((Number(av) || 0) - (Number(bv) || 0)) * dir
+    return String(av).localeCompare(String(bv)) * dir
+  })
+})
+
 function countBy(items, key) {
   return items.reduce((acc, item) => {
     const value = item[key] || 'Blank'
@@ -126,13 +140,23 @@ const DONUT_COLORS = {
   Blank: '#cbd5e1',
 }
 
+// Scopes every analytics chart (except the region comparison, which is
+// inherently cross-region) to a single CHEDRO when selected.
+const analyticsRows = computed(() => {
+  if (!analyticsRegionCode.value) return rows.value
+  return rows.value.filter((row) => row.regionCode === analyticsRegionCode.value)
+})
+const analyticsRegion = computed(() => REGION_META.find((region) => region.code === analyticsRegionCode.value) || null)
+const analyticsStatusCounts = computed(() => countBy(analyticsRows.value, 'actionStatus'))
+const analyticsRirCounts = computed(() => countBy(analyticsRows.value, 'rirCategory'))
+
 const rirDonut = computed(() => {
-  const total = rows.value.length
+  const total = analyticsRows.value.length
   const circumference = 2 * Math.PI * 48
   let consumed = 0
   const segments = [...RIR_CATEGORY_OPTIONS, 'Blank']
     .map((label) => {
-      const count = rirCounts.value[label] || 0
+      const count = analyticsRirCounts.value[label] || 0
       const frac = total ? count / total : 0
       const segment = {
         label: label === 'Blank' ? 'Uncategorized' : label,
@@ -151,14 +175,16 @@ const rirDonut = computed(() => {
 
 const statusBars = computed(() => {
   const entries = ACTION_STATUS_OPTIONS
-    .map((label) => ({ label, count: statusCounts.value[label] || 0 }))
+    .map((label) => ({ label, count: analyticsStatusCounts.value[label] || 0 }))
     .filter((entry) => entry.count > 0)
     .sort((a, b) => b.count - a.count)
   const max = Math.max(1, ...entries.map((entry) => entry.count))
   return entries.map((entry) => ({ ...entry, widthPct: Math.max(2, Math.round((entry.count / max) * 100)) }))
 })
 
-// All 17 regions kept (zero bars included) so non-submitting regions stand out.
+// Always compares all 17 regions (zero bars included, so non-submitting
+// regions stand out); the selected CHEDRO is highlighted rather than the
+// chart being filtered down to one bar.
 const regionActivity = computed(() => {
   const max = Math.max(1, ...regionalSummary.value.map((region) => region.total))
   return regionalSummary.value.map((region) => ({
@@ -168,6 +194,7 @@ const regionActivity = computed(() => {
     higher: region.higher,
     totalPct: (region.total / max) * 100,
     higherPct: (region.higher / max) * 100,
+    selected: region.code === analyticsRegionCode.value,
   }))
 })
 
@@ -175,7 +202,7 @@ const increaseStats = computed(() => {
   const tf = []
   const osf = []
   const highest = []
-  rows.value.forEach((row) => {
+  analyticsRows.value.forEach((row) => {
     if (typeof row.proposedTfIncrease === 'number') tf.push(row.proposedTfIncrease)
     if (typeof row.proposedOsfIncrease === 'number') osf.push(row.proposedOsfIncrease)
     const h = Math.max(row.proposedTfIncrease ?? -Infinity, row.proposedOsfIncrease ?? -Infinity)
@@ -210,7 +237,7 @@ const increaseHistogram = computed(() => {
 
 const timelineChart = computed(() => {
   const byDay = {}
-  rows.value.forEach((row) => {
+  analyticsRows.value.forEach((row) => {
     const day = String(row.timestamp || '').slice(0, 10)
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) byDay[day] = (byDay[day] || 0) + 1
   })
@@ -307,17 +334,17 @@ watch(
   () => { currentPage.value = 1 },
 )
 
-function setSort(key) {
-  if (sort.key === key) sort.dir = sort.dir === 'asc' ? 'desc' : 'asc'
+function setSort(key, state = sort) {
+  if (state.key === key) state.dir = state.dir === 'asc' ? 'desc' : 'asc'
   else {
-    sort.key = key
-    sort.dir = 'asc'
+    state.key = key
+    state.dir = 'asc'
   }
 }
 
-function sortMark(key) {
-  if (sort.key !== key) return ''
-  return sort.dir === 'asc' ? '↑' : '↓'
+function sortMark(key, state = sort) {
+  if (state.key !== key) return ''
+  return state.dir === 'asc' ? '↑' : '↓'
 }
 
 function clearFilters() {
@@ -467,14 +494,25 @@ onMounted(async () => {
           <table class="w-full min-w-[1300px] divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th class="px-3 py-3">Region</th><th class="px-3 py-3 text-right">Private HEIs</th><th class="px-3 py-3 text-right">RIR</th><th class="px-3 py-3 text-right">Total</th>
-                <th class="px-3 py-3 text-right">Below</th><th class="px-3 py-3 text-right">Equivalent</th><th class="px-3 py-3 text-right">Higher</th>
-                <th class="px-3 py-3 text-right">Approved</th><th class="px-3 py-3 text-right">Denied</th><th class="px-3 py-3 text-right">Deferred</th><th class="px-3 py-3 text-right">Proceed</th>
-                <th class="px-3 py-3 text-right">Decreased</th><th class="px-3 py-3 text-right">Pending</th><th class="px-3 py-3 text-right">No Response</th><th class="px-3 py-3 text-right">Others</th>
+                <th class="px-3 py-3"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('shortName', regionSort)">Region {{ sortMark('shortName', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('privateHeiCount', regionSort)">Private HEIs {{ sortMark('privateHeiCount', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('rir', regionSort)">RIR {{ sortMark('rir', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('total', regionSort)">Total {{ sortMark('total', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('below', regionSort)">Below {{ sortMark('below', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('equivalent', regionSort)">Equivalent {{ sortMark('equivalent', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('higher', regionSort)">Higher {{ sortMark('higher', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('approved', regionSort)">Approved {{ sortMark('approved', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('denied', regionSort)">Denied {{ sortMark('denied', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('defer', regionSort)">Deferred {{ sortMark('defer', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('proceed', regionSort)">Proceed {{ sortMark('proceed', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('decreased', regionSort)">Decreased {{ sortMark('decreased', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('pending', regionSort)">Pending {{ sortMark('pending', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('noResponse', regionSort)">No Response {{ sortMark('noResponse', regionSort) }}</button></th>
+                <th class="px-3 py-3 text-right"><button class="inline-flex items-center gap-1 hover:text-slate-900" @click="setSort('others', regionSort)">Others {{ sortMark('others', regionSort) }}</button></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="region in regionalSummary" :key="region.code">
+              <tr v-for="region in sortedRegionalSummary" :key="region.code">
                 <td class="px-3 py-3 font-semibold text-slate-900">{{ region.shortName }}</td><td class="px-3 py-3 text-right">{{ region.privateHeiCount }}</td><td class="px-3 py-3 text-right">{{ region.rir }}%</td><td class="px-3 py-3 text-right font-black">{{ region.total }}</td>
                 <td class="px-3 py-3 text-right">{{ region.below }}</td><td class="px-3 py-3 text-right">{{ region.equivalent }}</td><td class="px-3 py-3 text-right">{{ region.higher }}</td>
                 <td class="px-3 py-3 text-right">{{ region.approved }}</td><td class="px-3 py-3 text-right">{{ region.denied }}</td><td class="px-3 py-3 text-right">{{ region.defer }}</td><td class="px-3 py-3 text-right">{{ region.proceed }}</td>
@@ -543,7 +581,27 @@ onMounted(async () => {
           </div>
 
           <template v-else>
-            <div class="grid gap-4 md:grid-cols-4">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <label class="block">
+                <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">CHEDRO</span>
+                <select v-model="analyticsRegionCode" class="mt-1 block w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm sm:w-72">
+                  <option value="">All CHEDROs ({{ rows.length }} submissions)</option>
+                  <option v-for="region in REGION_META" :key="region.code" :value="region.code">{{ region.shortName }}</option>
+                </select>
+              </label>
+              <p v-if="analyticsRegionCode" class="text-sm text-slate-500">
+                Showing <span class="font-semibold text-slate-900">{{ analyticsRegion?.label }}</span> — {{ analyticsRows.length }} submission{{ analyticsRows.length === 1 ? '' : 's' }}
+                <button type="button" class="ml-2 text-xs font-semibold text-indigo-700 underline hover:text-indigo-900" @click="analyticsRegionCode = ''">Clear</button>
+              </p>
+            </div>
+
+            <div v-if="analyticsRegionCode && !analyticsRows.length" class="mt-4 rounded-2xl border border-slate-200 px-4 py-12 text-center">
+              <p class="text-sm font-semibold text-slate-700">No submissions yet for {{ analyticsRegion?.shortName }}</p>
+              <p class="mt-1 text-xs text-slate-400">Pick a different CHEDRO or clear the filter to see all regions.</p>
+            </div>
+
+            <template v-else>
+            <div class="mt-5 grid gap-4 md:grid-cols-4">
               <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <p class="text-xs font-semibold text-slate-500">Average TF increase</p>
                 <p class="mt-1 text-2xl font-black text-slate-950">{{ fmtPct(increaseStats.avgTf) }}</p>
@@ -613,8 +671,8 @@ onMounted(async () => {
                   <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-rose-600"></span>Higher than RIR</span>
                 </p>
                 <ul class="mt-4 space-y-2.5">
-                  <li v-for="region in regionActivity" :key="region.code" class="flex items-center gap-3">
-                    <span class="w-20 shrink-0 truncate text-xs text-slate-600">{{ region.shortName }}</span>
+                  <li v-for="region in regionActivity" :key="region.code" class="flex items-center gap-3 rounded-lg" :class="region.selected ? 'bg-indigo-50 ring-1 ring-indigo-200' : ''">
+                    <span class="w-20 shrink-0 truncate text-xs" :class="region.selected ? 'font-bold text-indigo-900' : 'text-slate-600'">{{ region.shortName }}</span>
                     <div class="relative h-2.5 min-w-0 flex-1 rounded-full bg-slate-100">
                       <div class="absolute inset-y-0 left-0 rounded-full bg-indigo-600" :style="{ width: `${region.totalPct}%` }"></div>
                       <div class="absolute inset-y-0 left-0 rounded-full bg-rose-600" :style="{ width: `${region.higherPct}%` }"></div>
@@ -654,6 +712,7 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+            </template>
           </template>
         </div>
       </div>
