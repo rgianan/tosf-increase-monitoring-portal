@@ -1055,6 +1055,130 @@ function createAdminUser(email, password, displayName) {
   return seedUser(email, password, displayName || email, 'admin');
 }
 
+// ---- Maintenance: duplicate submission cleanup ----
+//
+// Duplicates are rows that describe the same HEI in the same region (matched by
+// Region_Code + UII, falling back to the normalized HEI name when UII is blank).
+// For each duplicate group exactly ONE row is kept and the rest are permanently
+// deleted. The keeper is chosen so that:
+//   1. a non-voided row always beats a voided row  -> voided duplicates are
+//      deleted first, and
+//   2. among rows of equal voided-status the newest is kept -> older rows are
+//      deleted.
+// A group with only one row is never touched, so an HEI never loses its last
+// record even if every copy is voided.
+//
+// Run previewDuplicateSubmissions() first (it deletes nothing and logs exactly
+// what would be removed), then deleteDuplicateSubmissions() to apply.
+
+function computeDuplicatePlan_() {
+  var config = getConfig_();
+  var sheet = getSubmissionsSheet_(config);
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length < 2) return { sheet: sheet, groups: 0, toDelete: [], keepers: [] };
+
+  var headers = values[0];
+  var map = columnMap_(headers);
+
+  var groups = {};
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    var regionCode = normalizeRegionCode_(row[map.Region_Code]);
+    var uii = cleanText_(row[map.UII], 50).toLowerCase();
+    var heiName = cleanText_(row[map.HEI_Name], 350);
+    var identity = uii || normalizeKey_(heiName);
+    if (!identity) continue; // rows with no HEI identity are left alone
+    var key = regionCode + '|' + identity;
+
+    var ts = String(row[map.Timestamp] || '');
+    if (!ts && map.Updated_At !== undefined) ts = String(row[map.Updated_At] || '');
+
+    var entry = {
+      rowIndex: i + 1, // 1-based sheet row
+      submissionId: String(row[map.Submission_ID] || ''),
+      regionCode: regionCode,
+      uii: cleanText_(row[map.UII], 50),
+      heiName: heiName,
+      voided: isTruthyFlag_(row[map.Voided]),
+      ts: ts
+    };
+    (groups[key] = groups[key] || []).push(entry);
+  }
+
+  var toDelete = [];
+  var keepers = [];
+  var duplicateGroups = 0;
+
+  Object.keys(groups).forEach(function (key) {
+    var entries = groups[key];
+    if (entries.length < 2) return;
+    duplicateGroups++;
+
+    entries.sort(function (a, b) {
+      if (a.voided !== b.voided) return a.voided ? 1 : -1; // non-voided first
+      if (a.ts !== b.ts) return a.ts < b.ts ? 1 : -1;      // newer first
+      return b.rowIndex - a.rowIndex;                       // later row = newer
+    });
+
+    var keeper = entries[0];
+    keepers.push(keeper);
+    for (var j = 1; j < entries.length; j++) {
+      var dup = entries[j];
+      dup.reason = dup.voided ? 'voided duplicate' : 'older duplicate';
+      dup.keptSubmissionId = keeper.submissionId;
+      toDelete.push(dup);
+    }
+  });
+
+  return { sheet: sheet, groups: duplicateGroups, toDelete: toDelete, keepers: keepers };
+}
+
+function previewDuplicateSubmissions() {
+  var plan = computeDuplicatePlan_();
+  if (!plan.toDelete.length) {
+    Logger.log('No duplicate submissions found.');
+    return 'No duplicate submissions found.';
+  }
+  Logger.log('Duplicate groups: ' + plan.groups + '. Rows that WOULD be deleted: ' + plan.toDelete.length + ' (nothing deleted in preview).');
+  plan.toDelete
+    .slice()
+    .sort(function (a, b) { return a.rowIndex - b.rowIndex; })
+    .forEach(function (dup) {
+      Logger.log('  row ' + dup.rowIndex + ' | ' + dup.submissionId + ' | ' + (dup.heiName || '(no name)') +
+        ' | region ' + dup.regionCode + ' | ' + dup.reason + ' | keep ' + dup.keptSubmissionId);
+    });
+  return 'Preview: ' + plan.toDelete.length + ' duplicate row(s) across ' + plan.groups +
+    ' group(s) would be deleted. Run deleteDuplicateSubmissions() to apply.';
+}
+
+function deleteDuplicateSubmissions() {
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    var plan = computeDuplicatePlan_();
+    if (!plan.toDelete.length) {
+      Logger.log('No duplicate submissions found.');
+      return 'No duplicate submissions found. Nothing deleted.';
+    }
+
+    // Delete from the bottom up so earlier row indices stay valid.
+    var rowsDesc = plan.toDelete
+      .map(function (dup) { return dup.rowIndex; })
+      .sort(function (a, b) { return b - a; });
+    rowsDesc.forEach(function (rowIndex) { plan.sheet.deleteRow(rowIndex); });
+    SpreadsheetApp.flush();
+
+    invalidateSubmissionsCache_();
+    auditLog_('duplicates_deleted', 'ok', '', '', plan.toDelete.length + ' row(s) across ' + plan.groups + ' group(s).');
+
+    var message = 'Deleted ' + plan.toDelete.length + ' duplicate row(s) across ' + plan.groups + ' group(s).';
+    Logger.log(message);
+    return message;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function seedAdminUser() {
   var email = 'admin@ched.gov.ph';
   var password = 'change-this-password';

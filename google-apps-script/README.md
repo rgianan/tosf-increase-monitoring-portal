@@ -105,3 +105,17 @@ After OTP verification, submitters can manage their own rows via three actions, 
 - `voidMySubmission` — soft delete: sets `Voided` = `TRUE` and `Voided_At`, keeping the row for audit.
 
 Two columns support this and are added automatically on next run: `Voided` and `Voided_At`. Voided rows are excluded from `listTosfSubmissions`, the dashboard summaries, and CSV export. If you have an existing `TOSF_Submissions` sheet, run any function once (or `setupProject_()`) so the new header columns are appended.
+
+## Maintenance: removing duplicate submissions
+
+Duplicates are rows describing the same HEI in the same region (matched by `Region_Code` + `UII`, falling back to the normalized HEI name when `UII` is blank). Two editor-run functions clean them up — **rows are permanently deleted, so this cannot be undone**:
+
+- `previewDuplicateSubmissions()` — deletes nothing; logs every row that *would* be removed (row number, submission ID, HEI, reason, and which row is kept). Run this first and review the Apps Script execution log.
+- `deleteDuplicateSubmissions()` — applies the deletion.
+
+For each duplicate group exactly **one** row is kept:
+
+1. a non-voided row always beats a voided row, so **voided duplicates are deleted first**; then
+2. among rows of equal voided status the **newest is kept and older ones deleted**.
+
+A group with only one row is never touched, so an HEI never loses its last record even if every copy is voided. The delete path holds a document lock, invalidates the submissions cache, and writes a `duplicates_deleted` audit entry. Back up the sheet (File → Make a copy) before running the delete.
