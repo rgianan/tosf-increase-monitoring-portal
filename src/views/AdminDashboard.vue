@@ -507,11 +507,11 @@ onMounted(async () => {
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'summary' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'summary'">Summary</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'regions' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'regions'">Regional Table</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'details' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'details'">HEI Details</button>
-            <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'analytics' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'analytics'">Analytics</button>
             <button class="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'duplicates' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'duplicates'">
               Duplicates
               <span v-if="duplicateReport.totalDuplicates" class="rounded-full px-1.5 text-xs font-bold" :class="activeTab === 'duplicates' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700'">{{ duplicateReport.totalDuplicates }}</span>
             </button>
+            <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'analytics' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'analytics'">Analytics</button>
           </div>
           <p class="text-sm text-slate-500">{{ filteredRows.length }} matching rows</p>
         </div>
@@ -617,10 +617,6 @@ onMounted(async () => {
         </div>
 
         <div v-else-if="activeTab === 'duplicates'" class="p-5">
-          <div class="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
-            Previews duplicate <strong>active</strong> submissions — the same HEI (matched by region + UII, or name when UII is blank) submitted more than once. For each group the <strong>newest is kept</strong> and older ones are flagged. This is read-only: to delete, run <code class="rounded bg-slate-200 px-1 font-mono">deleteDuplicateSubmissions()</code> in the Apps Script editor (which also removes voided duplicates not shown here).
-          </div>
-
           <div v-if="loading && !rows.length" class="rounded-2xl border border-slate-200 px-4 py-12 text-center text-sm text-slate-500">Loading submissions…</div>
 
           <div v-else-if="!duplicateReport.groups.length" class="rounded-2xl border border-slate-200 px-4 py-12 text-center">
