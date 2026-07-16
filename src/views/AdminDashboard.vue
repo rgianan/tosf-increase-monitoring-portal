@@ -123,6 +123,44 @@ const sortedRegionalSummary = computed(() => {
   })
 })
 
+// ---- Duplicate detection (preview only) ----
+// Mirrors the backend computeDuplicatePlan_ keeper rule (same HEI in the same
+// region -> keep the newest, flag the rest). The dashboard only loads active
+// (non-voided) rows, so this previews duplicates among active submissions; the
+// editor cleanup also removes voided duplicates, which aren't visible here.
+function normalizeName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+const duplicateReport = computed(() => {
+  const groups = new Map()
+  rows.value.forEach((row) => {
+    const region = String(row.regionCode || '').replace(/^0+/, '') || String(row.regionCode || '')
+    const identity = String(row.uii || '').trim().toLowerCase() || normalizeName(row.heiName)
+    if (!identity) return
+    const key = `${region}|${identity}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  })
+
+  const result = []
+  let totalDuplicates = 0
+  groups.forEach((entries) => {
+    if (entries.length < 2) return
+    const sorted = [...entries].sort((a, b) => {
+      const at = String(a.timestamp || '')
+      const bt = String(b.timestamp || '')
+      if (at !== bt) return at < bt ? 1 : -1 // newer first
+      return String(b.submissionId || '').localeCompare(String(a.submissionId || ''))
+    })
+    const [keeper, ...duplicates] = sorted
+    totalDuplicates += duplicates.length
+    result.push({ regionLabel: keeper.regionLabel, regionCode: keeper.regionCode, heiName: keeper.heiName, uii: keeper.uii, keeper, duplicates })
+  })
+  result.sort((a, b) => String(a.regionLabel).localeCompare(String(b.regionLabel)) || String(a.heiName).localeCompare(String(b.heiName)))
+  return { groups: result, totalDuplicates, affectedHeis: result.length }
+})
+
 function countBy(items, key) {
   return items.reduce((acc, item) => {
     const value = item[key] || 'Blank'
@@ -470,6 +508,10 @@ onMounted(async () => {
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'regions' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'regions'">Regional Table</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'details' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'details'">HEI Details</button>
             <button class="rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'analytics' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'analytics'">Analytics</button>
+            <button class="inline-flex items-center gap-1.5 rounded-2xl px-4 py-2 text-sm font-bold transition" :class="activeTab === 'duplicates' ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30' : 'border border-slate-300 text-slate-700 hover:border-slate-900'" @click="activeTab = 'duplicates'">
+              Duplicates
+              <span v-if="duplicateReport.totalDuplicates" class="rounded-full px-1.5 text-xs font-bold" :class="activeTab === 'duplicates' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700'">{{ duplicateReport.totalDuplicates }}</span>
+            </button>
           </div>
           <p class="text-sm text-slate-500">{{ filteredRows.length }} matching rows</p>
         </div>
@@ -572,6 +614,65 @@ onMounted(async () => {
               <span>Page {{ currentPage }} of {{ totalPages }}</span>
             </div>
           </div>
+        </div>
+
+        <div v-else-if="activeTab === 'duplicates'" class="p-5">
+          <div class="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+            Previews duplicate <strong>active</strong> submissions — the same HEI (matched by region + UII, or name when UII is blank) submitted more than once. For each group the <strong>newest is kept</strong> and older ones are flagged. This is read-only: to delete, run <code class="rounded bg-slate-200 px-1 font-mono">deleteDuplicateSubmissions()</code> in the Apps Script editor (which also removes voided duplicates not shown here).
+          </div>
+
+          <div v-if="loading && !rows.length" class="rounded-2xl border border-slate-200 px-4 py-12 text-center text-sm text-slate-500">Loading submissions…</div>
+
+          <div v-else-if="!duplicateReport.groups.length" class="rounded-2xl border border-slate-200 px-4 py-12 text-center">
+            <p class="text-sm font-semibold text-slate-700">No duplicate entries found</p>
+            <p class="mt-1 text-xs text-slate-400">No HEI has more than one active submission.</p>
+          </div>
+
+          <template v-else>
+            <p class="mb-4 text-sm text-slate-600">
+              <span class="font-bold text-rose-700">{{ duplicateReport.totalDuplicates }}</span> older duplicate row{{ duplicateReport.totalDuplicates === 1 ? '' : 's' }} across
+              <span class="font-bold text-slate-900">{{ duplicateReport.affectedHeis }}</span> HEI{{ duplicateReport.affectedHeis === 1 ? '' : 's' }} would be removed, keeping the newest of each.
+            </p>
+
+            <div class="space-y-4">
+              <div v-for="group in duplicateReport.groups" :key="`${group.regionCode}-${group.uii}-${group.heiName}`" class="rounded-2xl border border-slate-200 p-4">
+                <div>
+                  <p class="font-semibold text-slate-900">{{ group.heiName }}</p>
+                  <p class="text-xs text-slate-500">{{ group.regionLabel }}<span v-if="group.uii"> • UII {{ group.uii }}</span> • {{ group.duplicates.length + 1 }} entries</p>
+                </div>
+                <div class="mt-3 w-full overflow-x-auto">
+                  <table class="w-full min-w-[720px] text-sm">
+                    <thead class="text-left text-xs uppercase tracking-wide text-slate-400">
+                      <tr>
+                        <th class="py-1 pr-3">Disposition</th><th class="py-1 pr-3">Timestamp</th><th class="py-1 pr-3">Reference</th>
+                        <th class="py-1 pr-3 text-right">TF %</th><th class="py-1 pr-3 text-right">OSF %</th><th class="py-1 pr-3">RIR Category</th><th class="py-1 pr-3">Action / Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr class="border-t border-slate-100">
+                        <td class="py-2 pr-3"><span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">Keep (newest)</span></td>
+                        <td class="py-2 pr-3 text-slate-600">{{ group.keeper.timestamp }}</td>
+                        <td class="py-2 pr-3 font-mono text-xs text-slate-500">{{ group.keeper.submissionId }}</td>
+                        <td class="py-2 pr-3 text-right">{{ group.keeper.proposedTfIncrease ?? '—' }}</td>
+                        <td class="py-2 pr-3 text-right">{{ group.keeper.proposedOsfIncrease ?? '—' }}</td>
+                        <td class="py-2 pr-3 text-slate-600">{{ group.keeper.rirCategory }}</td>
+                        <td class="py-2 pr-3 text-slate-600">{{ group.keeper.actionStatus }}</td>
+                      </tr>
+                      <tr v-for="dup in group.duplicates" :key="dup.submissionId" class="border-t border-slate-100 bg-rose-50/50">
+                        <td class="py-2 pr-3"><span class="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">Would delete — older</span></td>
+                        <td class="py-2 pr-3 text-slate-600">{{ dup.timestamp }}</td>
+                        <td class="py-2 pr-3 font-mono text-xs text-slate-500">{{ dup.submissionId }}</td>
+                        <td class="py-2 pr-3 text-right">{{ dup.proposedTfIncrease ?? '—' }}</td>
+                        <td class="py-2 pr-3 text-right">{{ dup.proposedOsfIncrease ?? '—' }}</td>
+                        <td class="py-2 pr-3 text-slate-600">{{ dup.rirCategory }}</td>
+                        <td class="py-2 pr-3 text-slate-600">{{ dup.actionStatus }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
 
         <div v-else class="p-5">
